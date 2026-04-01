@@ -27,6 +27,18 @@ app.add_middleware(
 def read_root():
     return {"message": "Welcome to Explainable Text Classification API"}
 
+@app.get("/model-info")
+def model_info():
+    valid_tasks = ["fake_news", "toxic", "sentiment"]
+    return {
+        task: {
+            "classes": model_manager.get_class_names(task),
+            "source": model_manager.get_model_source(task),
+            "cached": model_manager.get_model(task) is not None,
+        }
+        for task in valid_tasks
+    }
+
 @app.post("/predict", response_model=PredictionResponse)
 def predict(request: PredictionRequest):
     task = request.task

@@ -1,104 +1,157 @@
-import os
 import pickle
+from pathlib import Path
+from typing import Dict, List, Tuple
+import warnings
+
+from datasets import load_dataset
+from sklearn.exceptions import InconsistentVersionWarning
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
-from sklearn.svm import SVC
 from sklearn.pipeline import Pipeline, make_pipeline
-from typing import Dict, Any, Tuple
+from sklearn import __version__ as sklearn_version
 
-# Simple synthetic datasets to train on startup
-fake_news_data = (
-    ["breaking news official shock claims", "shocking official news just in", "aliens found in the official shocking report", "completely official and shocking", "exclusive breaking report shock"],
-    ["Fake", "Fake", "Fake", "Fake", "Fake"]
-)
-real_news_data = (
-    ["the government passed a new bill", "economic growth is steady", "local elections are coming up", "healthcare policies updated", "climate conference yields positive results"],
-    ["Real", "Real", "Real", "Real", "Real"]
-)
 
-toxic_data = (
-    ["you are stupid and I hate you", "this is garbage", "shut up you idiot", "you are the worst person", "absolute trash"],
-    ["Toxic", "Toxic", "Toxic", "Toxic", "Toxic"]
-)
-non_toxic_data = (
-    ["thank you for the help", "have a great day", "this is interesting", "I appreciate your response", "good job"],
-    ["Non-Toxic", "Non-Toxic", "Non-Toxic", "Non-Toxic", "Non-Toxic"]
-)
+TaskData = Tuple[List[str], List[str]]
 
-sentiment_pos = (
-    ["I love this so much", "this is amazing and wonderful", "great job excellent", "fantastic outstanding experience", "really positive awesome"],
-    ["Positive", "Positive", "Positive", "Positive", "Positive"]
-)
-sentiment_neu = (
-    ["this is okay", "it was average", "nothing special but fine", "neutral response just regular", "it is what it is"],
-    ["Neutral", "Neutral", "Neutral", "Neutral", "Neutral"]
-)
-sentiment_neg = (
-    ["this is terrible", "hate this awful horrible", "worst experience ever", "doing this makes me sad and angry", "absolutely disgusting"],
-    ["Negative", "Negative", "Negative", "Negative", "Negative"]
-)
+
+def _clean_text(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
 
 class ModelManager:
     def __init__(self):
         self.models: Dict[str, Pipeline] = {}
         self.class_names: Dict[str, list[str]] = {}
+        self.model_sources: Dict[str, str] = {}
+        self.model_dir = Path(__file__).resolve().parent.parent / "trained_models"
+        self.model_dir.mkdir(parents=True, exist_ok=True)
 
-    def train_models(self):
-        # 1. Fake News (Logistic Regression)
-        X_fake = fake_news_data[0] + real_news_data[0]
-        y_fake = fake_news_data[1] + real_news_data[1]
-        fake_pipeline = make_pipeline(
-            TfidfVectorizer(),
-            LogisticRegression(max_iter=1000)
+    def _model_path(self, task: str) -> Path:
+        return self.model_dir / f"{task}_tfidf_logreg.pkl"
+
+    def _save_model(self, task: str, pipeline: Pipeline, source: str) -> None:
+        payload = {
+            "pipeline": pipeline,
+            "class_names": pipeline.classes_.tolist(),
+            "source": source,
+            "sklearn_version": sklearn_version,
+        }
+        with self._model_path(task).open("wb") as f:
+            pickle.dump(payload, f)
+
+    def _load_saved_model(self, task: str) -> bool:
+        path = self._model_path(task)
+        if not path.exists():
+            return False
+        with path.open("rb") as f:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", InconsistentVersionWarning)
+                payload = pickle.load(f)
+
+        cached_version = payload.get("sklearn_version")
+        if cached_version != sklearn_version:
+            print(
+                f"[{task}] Cached model built with scikit-learn {cached_version}; "
+                f"current version is {sklearn_version}. Retraining..."
+            )
+            return False
+
+        self.models[task] = payload["pipeline"]
+        self.class_names[task] = payload["class_names"]
+        self.model_sources[task] = payload.get("source", "Unknown cached source")
+        return True
+
+    def _build_pipeline(self) -> Pipeline:
+        # Logistic Regression + TF-IDF is strong, open-source, and highly explainable with LIME.
+        return make_pipeline(
+            TfidfVectorizer(
+                max_features=40000,
+                ngram_range=(1, 2),
+                min_df=3,
+                sublinear_tf=True,
+                strip_accents="unicode",
+            ),
+            LogisticRegression(
+                max_iter=2000,
+                solver="saga",
+                n_jobs=-1,
+                random_state=42,
+            ),
         )
-        fake_pipeline.fit(X_fake, y_fake)
-        self.models['fake_news'] = fake_pipeline
-        self.class_names['fake_news'] = fake_pipeline.classes_.tolist()
 
-        # 2. Toxic Comment (Linear SVM with probabilities)
-        print("Loading Jigsaw Toxic Comment Challenge data from HuggingFace...")
-        try:
-            from datasets import load_dataset
-            # Load dataset and extract samples
-            ds = load_dataset("tasksource/jigsaw_toxicity", split="train")
-            ds = ds.shuffle(seed=42)
-            
-            # Filter to get toxic and non-toxic examples
-            toxic_examples = ds.filter(lambda x: x['toxic'] == 1).select(range(1000))
-            non_toxic_examples = ds.filter(lambda x: x['toxic'] == 0).select(range(1000))
-            
-            X_toxic = list(toxic_examples['comment_text']) + list(non_toxic_examples['comment_text'])
-            y_toxic = ["Toxic"] * 1000 + ["Non-Toxic"] * 1000
-        except Exception as e:
-            print(f"Failed to load Jigsaw dataset: {e}. Falling back to synthetic.")
-            X_toxic = toxic_data[0] + non_toxic_data[0]
-            y_toxic = toxic_data[1] + non_toxic_data[1]
+    def _load_fake_news_dataset(self, max_rows: int = 20000) -> TaskData:
+        ds = load_dataset("mrm8488/fake-news", split=f"train[:{max_rows}]").shuffle(seed=42)
+        text = [_clean_text(t) for t in ds["text"]]
+        # Dataset label semantics: 0 = Reuters-style real news, 1 = fake/manipulated news.
+        labels = ["Real" if int(v) == 0 else "Fake" for v in ds["label"]]
+        return text, labels
 
-        toxic_pipeline = make_pipeline(
-            TfidfVectorizer(max_features=10000), # Limit features for faster train
-            SVC(kernel='linear', probability=True, max_iter=2000)
+    def _load_toxic_dataset(self, per_class: int = 6000) -> TaskData:
+        ds = load_dataset("tasksource/jigsaw_toxicity", split="train").shuffle(seed=42)
+        toxic = ds.filter(lambda row: int(row["toxic"]) == 1).select(range(per_class))
+        non_toxic = ds.filter(lambda row: int(row["toxic"]) == 0).select(range(per_class))
+
+        text = [_clean_text(t) for t in toxic["comment_text"]] + [_clean_text(t) for t in non_toxic["comment_text"]]
+        labels = ["Toxic"] * len(toxic) + ["Non-Toxic"] * len(non_toxic)
+        return text, labels
+
+    def _load_sentiment_dataset(self, per_class: int = 5000) -> TaskData:
+        ds = load_dataset("tweet_eval", "sentiment", split="train").shuffle(seed=42)
+        negative = ds.filter(lambda row: int(row["label"]) == 0).select(range(per_class))
+        neutral = ds.filter(lambda row: int(row["label"]) == 1).select(range(per_class))
+        positive = ds.filter(lambda row: int(row["label"]) == 2).select(range(per_class))
+
+        text = [_clean_text(t) for t in negative["text"]] + [_clean_text(t) for t in neutral["text"]] + [
+            _clean_text(t) for t in positive["text"]
+        ]
+        labels = ["Negative"] * len(negative) + ["Neutral"] * len(neutral) + ["Positive"] * len(positive)
+        return text, labels
+
+    def _train_task(self, task: str, data_loader, source: str) -> None:
+        if self._load_saved_model(task):
+            print(f"[{task}] Loaded cached model from {self._model_path(task)}")
+            return
+
+        print(f"[{task}] Downloading and preparing dataset...")
+        X, y = data_loader()
+        pipeline = self._build_pipeline()
+        print(f"[{task}] Training model on {len(X)} samples...")
+        pipeline.fit(X, y)
+
+        self.models[task] = pipeline
+        self.class_names[task] = pipeline.classes_.tolist()
+        self.model_sources[task] = source
+        self._save_model(task, pipeline, source)
+        print(f"[{task}] Training complete. Saved to {self._model_path(task)}")
+
+    def train_models(self) -> None:
+        self._train_task(
+            task="fake_news",
+            data_loader=lambda: self._load_fake_news_dataset(max_rows=20000),
+            source="HuggingFace: mrm8488/fake-news",
         )
-        toxic_pipeline.fit(X_toxic, y_toxic)
-        self.models['toxic'] = toxic_pipeline
-        self.class_names['toxic'] = toxic_pipeline.classes_.tolist()
-        print("Toxic Comment model trained successfully!")
-
-        # 3. Sentiment Analysis (Logistic Regression)
-        X_sent = sentiment_pos[0] + sentiment_neu[0] + sentiment_neg[0]
-        y_sent = sentiment_pos[1] + sentiment_neu[1] + sentiment_neg[1]
-        sent_pipeline = make_pipeline(
-            TfidfVectorizer(),
-            LogisticRegression(max_iter=1000)
+        self._train_task(
+            task="toxic",
+            data_loader=lambda: self._load_toxic_dataset(per_class=6000),
+            source="HuggingFace: tasksource/jigsaw_toxicity",
         )
-        sent_pipeline.fit(X_sent, y_sent)
-        self.models['sentiment'] = sent_pipeline
-        self.class_names['sentiment'] = sent_pipeline.classes_.tolist()
-        print("Models trained successfully!")
+        self._train_task(
+            task="sentiment",
+            data_loader=lambda: self._load_sentiment_dataset(per_class=5000),
+            source="HuggingFace: tweet_eval (sentiment)",
+        )
+        print("All models are ready.")
 
     def get_model(self, task: str) -> Pipeline:
         return self.models.get(task)
 
     def get_class_names(self, task: str) -> list[str]:
         return self.class_names.get(task)
+
+    def get_model_source(self, task: str) -> str:
+        return self.model_sources.get(task, "Unknown")
+
 
 model_manager = ModelManager()

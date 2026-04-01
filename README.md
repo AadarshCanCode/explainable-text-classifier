@@ -16,7 +16,7 @@ This application provides a web interface to classify text into different catego
 The project is built entirely without Docker, utilizing a modern, modular Monorepo structure containing separate frontend and backend applications.
 
 - **Backend (`/backend`)**: A robust Python (FastAPI) server handling RESTful requests. 
-  - Uses `scikit-learn` to train specific classifiers on simple synthetic data at startup. 
+  - Uses `scikit-learn` to train specific classifiers on real-world Hugging Face datasets at startup (then caches models locally). 
   - Incorporates the `lime` package to compute locally interpretable weights for the text features.
   - Returns structured prediction data and raw HTML for the LIME explanation visualizer.
   
