@@ -55,7 +55,29 @@ export default function ExplainableClassifier() {
     // Inject LIME HTML cleanly
     useEffect(() => {
         if (result?.html && limeContainerRef.current) {
-            limeContainerRef.current.innerHTML = result.html;
+            // LIME as_html() returns a full HTML document including <head> and <body>.
+            // We only want the visualization parts.
+            // We use a temporary div to parse it and extract the relevant nodes.
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(result.html, 'text/html');
+            
+            // Extract the main LIME container script and the div it renders into
+            const scripts = Array.from(doc.querySelectorAll('script'));
+            const content = doc.body.innerHTML;
+
+            limeContainerRef.current.innerHTML = content;
+            
+            // Re-run scripts manually if necessary, though as_html(predict_proba=False) 
+            // is usually more static. LIME injects global JS (d3, etc).
+            scripts.forEach(oldScript => {
+                const newScript = document.createElement("script");
+                if (oldScript.src) {
+                    newScript.src = oldScript.src;
+                } else {
+                    newScript.textContent = oldScript.textContent;
+                }
+                document.body.appendChild(newScript);
+            });
         }
     }, [result]);
 
@@ -136,9 +158,17 @@ export default function ExplainableClassifier() {
                             <textarea
                                 rows="8"
                                 value={text}
-                                onChange={(e) => setText(e.target.value)}
-                                placeholder="Type or paste text to analyze here..."
-                                className="w-full bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block p-3 transition-colors resize-none outline-none"
+                                onChange={(e) => {
+                                    setText(e.target.value);
+                                    if (error) setError(null);
+                                }}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter' && e.ctrlKey) {
+                                        handleAnalyze();
+                                    }
+                                }}
+                                placeholder="Type or paste text to analyze here... (Ctrl+Enter to run)"
+                                className="w-full bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block p-3 transition-colors resize-none outline-none font-mono"
                             ></textarea>
                         </div>
 
@@ -219,11 +249,12 @@ export default function ExplainableClassifier() {
                                     </div>
                                 )}
 
-                                <div className="border border-slate-200 rounded-xl overflow-hidden mt-4 shadow-sm">
-                                    <div className="bg-slate-50 border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">
-                                        LIME Text Explanation
+                                <div className="border border-indigo-200 rounded-xl overflow-hidden mt-4 shadow-sm">
+                                    <div className="bg-indigo-50 border-b border-indigo-200 px-4 py-3 text-sm font-semibold text-indigo-800 flex items-center justify-between">
+                                        <span>LIME Advanced Text Interactivity</span>
+                                        <span className="text-xs font-normal opacity-70">Interactive Local Explanations</span>
                                     </div>
-                                    <div className="p-4 overflow-x-auto bg-white" ref={limeContainerRef}></div>
+                                    <div className="p-4 overflow-x-auto bg-white min-h-[400px]" ref={limeContainerRef}></div>
                                 </div>
                             </div>
                         )}

@@ -34,7 +34,9 @@ def explain_prediction(
     top_features = [{"word": word, "weight": weight} for word, weight in feature_weights]
     
     # Generate static HTML suitable for embedding
-    explanation_html = exp.as_html()
+    # Note: LIME's as_html() by default might include scripts that are stripped or blocked in React.
+    # We use show_in_notebook=False to get the raw HTML string.
+    explanation_html = exp.as_html(predict_proba=False)
     
     return {
         "prediction": predicted_label,
