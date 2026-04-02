@@ -27,15 +27,29 @@ export const getModelInfo = async () => {
     return response.data;
 };
 
-export const analyzeText = async (text, task) => {
+export const getBenchmarks = async () => {
+    const response = await client.get('/benchmarks');
+    return response.data;
+};
+
+export const analyzeText = async (text, task, modelName = null) => {
     try {
         const response = await client.post('/predict', {
             text,
-            task
+            task,
+            model_name: modelName,
         });
         return response.data;
     } catch (error) {
         console.error("Error analyzing text:", error);
         throw error;
     }
+};
+
+export const comparePredictions = async (text, task) => {
+    const response = await client.post('/predict/compare', {
+        text,
+        task,
+    });
+    return response.data;
 };

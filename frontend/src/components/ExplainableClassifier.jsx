@@ -9,8 +9,24 @@ import {
     Legend,
 } from 'chart.js';
 import { Bar } from 'react-chartjs-2';
-import { AlertTriangle, Activity, BrainCircuit, Database, Loader2, Sparkles } from 'lucide-react';
-import { analyzeText, getHealth, getModelInfo, getTasks } from '../services/api';
+import {
+    AlertTriangle,
+    Activity,
+    BrainCircuit,
+    Database,
+    Loader2,
+    Sparkles,
+    Trophy,
+    GitCompare,
+} from 'lucide-react';
+import {
+    analyzeText,
+    comparePredictions,
+    getBenchmarks,
+    getHealth,
+    getModelInfo,
+    getTasks,
+} from '../services/api';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
 
@@ -38,11 +54,18 @@ function formatSource(source) {
     return source?.replace('HuggingFace: ', '') || 'Unknown source';
 }
 
+function formatMetric(value) {
+    return `${(value * 100).toFixed(2)}%`;
+}
+
 export default function ExplainableClassifier() {
     const [task, setTask] = useState('fake_news');
     const [text, setText] = useState('');
+    const [selectedModelChoice, setSelectedModelChoice] = useState('best');
+
     const [loading, setLoading] = useState(false);
     const [result, setResult] = useState(null);
+    const [compareResult, setCompareResult] = useState(null);
     const [error, setError] = useState(null);
 
     const [bootLoading, setBootLoading] = useState(true);
@@ -50,16 +73,18 @@ export default function ExplainableClassifier() {
     const [health, setHealth] = useState(null);
     const [tasks, setTasks] = useState(fallbackTasks);
     const [modelInfo, setModelInfo] = useState({});
+    const [benchmarks, setBenchmarks] = useState({});
 
     useEffect(() => {
         let isMounted = true;
 
         async function loadBootData() {
             try {
-                const [healthData, taskData, modelData] = await Promise.all([
+                const [healthData, taskData, modelData, benchmarkData] = await Promise.all([
                     getHealth(),
                     getTasks(),
                     getModelInfo(),
+                    getBenchmarks(),
                 ]);
 
                 if (!isMounted) {
@@ -68,6 +93,7 @@ export default function ExplainableClassifier() {
                 setHealth(healthData);
                 setTasks(taskData);
                 setModelInfo(modelData);
+                setBenchmarks(benchmarkData);
             } catch (fetchError) {
                 if (!isMounted) {
                     return;
@@ -92,7 +118,22 @@ export default function ExplainableClassifier() {
     }));
 
     const selectedTask = tasks[task] || fallbackTasks[task];
-    const selectedModel = modelInfo[task];
+    const selectedTaskModelInfo = modelInfo[task] || {};
+    const selectedBenchmark = benchmarks[task] || { best_model: null, models: [] };
+
+    const modelOptions = useMemo(() => {
+        const dynamicOptions = selectedTaskModelInfo.available_models || [];
+        const bestModelName = selectedBenchmark.best_model || selectedTaskModelInfo.best_model;
+        const bestLabel = dynamicOptions.find((option) => option.model_name === bestModelName)?.model_label;
+
+        return [
+            {
+                model_name: 'best',
+                model_label: bestLabel ? `Best (${bestLabel})` : 'Best (Auto)',
+            },
+            ...dynamicOptions,
+        ];
+    }, [selectedTaskModelInfo, selectedBenchmark]);
 
     const chartData = useMemo(() => {
         if (!result?.explanation?.length) {
@@ -158,8 +199,13 @@ export default function ExplainableClassifier() {
         setLoading(true);
         setError(null);
         try {
-            const data = await analyzeText(text, task);
-            setResult(data);
+            const chosenModel = selectedModelChoice === 'best' ? null : selectedModelChoice;
+            const [predictionData, comparisonData] = await Promise.all([
+                analyzeText(text, task, chosenModel),
+                comparePredictions(text, task),
+            ]);
+            setResult(predictionData);
+            setCompareResult(comparisonData);
         } catch (analyzeError) {
             setError('Prediction failed. Confirm backend is running and fully initialized.');
         } finally {
@@ -227,7 +273,9 @@ export default function ExplainableClassifier() {
                             value={task}
                             onChange={(event) => {
                                 setTask(event.target.value);
+                                setSelectedModelChoice('best');
                                 setResult(null);
+                                setCompareResult(null);
                                 setError(null);
                             }}
                             className="w-full mt-2 rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm font-medium outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100"
@@ -235,6 +283,19 @@ export default function ExplainableClassifier() {
                             {taskOptions.map((taskOption) => (
                                 <option key={taskOption.id} value={taskOption.id}>
                                     {taskOption.label}
+                                </option>
+                            ))}
+                        </select>
+
+                        <label className="block mt-4 text-sm font-bold text-zinc-700">Model</label>
+                        <select
+                            value={selectedModelChoice}
+                            onChange={(event) => setSelectedModelChoice(event.target.value)}
+                            className="w-full mt-2 rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-sm font-medium outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100"
+                        >
+                            {modelOptions.map((option) => (
+                                <option key={option.model_name} value={option.model_name}>
+                                    {option.model_label}
                                 </option>
                             ))}
                         </select>
@@ -288,7 +349,56 @@ export default function ExplainableClassifier() {
                     </div>
                 </section>
 
-                <section className="xl:col-span-8">
+                <section className="xl:col-span-8 flex flex-col gap-5">
+                    <div className="card-surface p-5 sm:p-6">
+                        <div className="flex items-start justify-between gap-3">
+                            <div>
+                                <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Model Benchmarks</p>
+                                <h2 className="text-lg sm:text-xl font-black mt-1 flex items-center gap-2">
+                                    <Trophy className="w-5 h-5 text-amber-600" />
+                                    Accuracy Comparison
+                                </h2>
+                            </div>
+                            <p className="text-xs text-zinc-500">Dataset: {formatSource(selectedTaskModelInfo.source)}</p>
+                        </div>
+
+                        <div className="mt-4 overflow-x-auto">
+                            <table className="w-full text-sm border-separate border-spacing-y-2 min-w-[640px]">
+                                <thead>
+                                    <tr className="text-left text-zinc-500 text-xs uppercase tracking-[0.12em]">
+                                        <th className="px-3">Model</th>
+                                        <th className="px-3">Accuracy</th>
+                                        <th className="px-3">Precision</th>
+                                        <th className="px-3">Recall</th>
+                                        <th className="px-3">F1</th>
+                                        <th className="px-3">Train Time</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {selectedBenchmark.models?.map((row) => {
+                                        const isBest = row.model_name === selectedBenchmark.best_model;
+                                        return (
+                                            <tr
+                                                key={row.model_name}
+                                                className={`rounded-xl ${isBest ? 'bg-emerald-50 border border-emerald-200' : 'bg-zinc-50 border border-zinc-200'}`}
+                                            >
+                                                <td className="px-3 py-2.5 font-semibold text-zinc-900">
+                                                    {row.model_label}
+                                                    {isBest && <span className="ml-2 text-xs text-emerald-700 font-bold">BEST</span>}
+                                                </td>
+                                                <td className="px-3 py-2.5 font-mono">{formatMetric(row.accuracy)}</td>
+                                                <td className="px-3 py-2.5 font-mono">{formatMetric(row.precision_weighted)}</td>
+                                                <td className="px-3 py-2.5 font-mono">{formatMetric(row.recall_weighted)}</td>
+                                                <td className="px-3 py-2.5 font-mono">{formatMetric(row.f1_weighted)}</td>
+                                                <td className="px-3 py-2.5 font-mono">{row.train_time_seconds.toFixed(2)}s</td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
                     <div className="card-surface p-5 sm:p-6 min-h-[760px]">
                         <div className="flex items-start justify-between gap-3">
                             <div>
@@ -297,7 +407,7 @@ export default function ExplainableClassifier() {
                             </div>
                             <div className="text-right">
                                 <p className="text-xs text-zinc-500">Dataset Source</p>
-                                <p className="text-sm font-bold text-zinc-800">{formatSource(selectedModel?.source)}</p>
+                                <p className="text-sm font-bold text-zinc-800">{formatSource(selectedTaskModelInfo.source)}</p>
                             </div>
                         </div>
 
@@ -306,7 +416,7 @@ export default function ExplainableClassifier() {
                                 <Database className="mx-auto w-8 h-8 text-zinc-400" />
                                 <h3 className="mt-3 text-lg font-bold text-zinc-800">Ready for Analysis</h3>
                                 <p className="mt-2 text-sm text-zinc-500">
-                                    Run inference to see class probabilities, influential tokens, and interactive LIME view.
+                                    Run inference to compare all model outputs and inspect token-level explanation.
                                 </p>
                             </div>
                         )}
@@ -320,7 +430,7 @@ export default function ExplainableClassifier() {
 
                         {result && !loading && (
                             <div className="mt-6 space-y-5 animate-fade-up">
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                                     <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
                                         <p className="text-xs uppercase tracking-[0.18em] text-zinc-500">Prediction</p>
                                         <p className="text-2xl font-black text-zinc-900 mt-2">{result.prediction}</p>
@@ -334,6 +444,10 @@ export default function ExplainableClassifier() {
                                                 style={{ width: `${Math.max(3, result.confidence * 100)}%` }}
                                             />
                                         </div>
+                                    </div>
+                                    <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
+                                        <p className="text-xs uppercase tracking-[0.18em] text-zinc-500">Model Used</p>
+                                        <p className="text-base font-black text-zinc-900 mt-2 break-words">{result.model_name}</p>
                                     </div>
                                 </div>
 
@@ -356,6 +470,46 @@ export default function ExplainableClassifier() {
                                         ))}
                                     </div>
                                 </div>
+
+                                {compareResult?.predictions?.length > 0 && (
+                                    <div className="rounded-2xl border border-zinc-200 p-4">
+                                        <p className="text-sm font-bold text-zinc-800 mb-3 flex items-center gap-2">
+                                            <GitCompare className="w-4 h-4 text-violet-700" />
+                                            Comparative Outputs (Same Input Across Models)
+                                        </p>
+                                        <div className="space-y-2">
+                                            {compareResult.predictions.map((row) => {
+                                                const isUsed = row.model_name === result.model_name;
+                                                const isBest = row.model_name === compareResult.selected_by_metric;
+                                                return (
+                                                    <div
+                                                        key={row.model_name}
+                                                        className={`rounded-xl border p-3 ${
+                                                            isUsed
+                                                                ? 'border-cyan-300 bg-cyan-50'
+                                                                : isBest
+                                                                    ? 'border-emerald-300 bg-emerald-50'
+                                                                    : 'border-zinc-200 bg-zinc-50'
+                                                        }`}
+                                                    >
+                                                        <div className="flex items-center justify-between gap-2">
+                                                            <div>
+                                                                <p className="text-sm font-semibold text-zinc-900">{row.model_label}</p>
+                                                                <p className="text-xs text-zinc-600">Prediction: {row.prediction}</p>
+                                                            </div>
+                                                            <div className="text-right">
+                                                                <p className="text-sm font-bold text-zinc-900">{(row.confidence * 100).toFixed(1)}%</p>
+                                                                <p className="text-[10px] uppercase tracking-wide text-zinc-500">
+                                                                    {isUsed ? 'Used' : isBest ? 'Best by F1' : 'Candidate'}
+                                                                </p>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                )}
 
                                 {chartData && (
                                     <div className="rounded-2xl border border-zinc-200 p-3 h-[320px]">
