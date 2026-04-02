@@ -3,16 +3,31 @@ import ExplainableClassifier from './components/ExplainableClassifier';
 
 function App() {
     return (
-        <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-purple-50 text-slate-900">
-            <header className="bg-white shadow-sm border-b border-indigo-100 sticky top-0 z-10">
-                <div className="max-w-5xl mx-auto py-4 px-4 sm:px-6 lg:px-8 flex items-center justify-between">
-                    <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600">
-                        Explainable AI Text Classifier
-                    </h1>
-                    <a href="https://github.com/marcotcr/lime" target="_blank" rel="noreferrer" className="text-sm font-medium text-slate-500 hover:text-indigo-600 transition-colors">Powered by LIME</a>
+        <div className="min-h-screen bg-app text-zinc-950">
+            <header className="border-b border-zinc-900/10 sticky top-0 z-20 backdrop-blur bg-amber-50/90">
+                <div className="max-w-7xl mx-auto py-4 px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-3">
+                        <div className="h-9 w-9 rounded-lg bg-zinc-900 text-amber-100 flex items-center justify-center text-sm font-bold">
+                            XA
+                        </div>
+                        <div>
+                            <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">Explainable AI</p>
+                            <h1 className="text-xl sm:text-2xl font-black leading-tight">
+                                Text Intelligence Studio
+                            </h1>
+                        </div>
+                    </div>
+                    <a
+                        href="https://github.com/marcotcr/lime"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-xs sm:text-sm font-semibold text-zinc-700 hover:text-zinc-950 transition-colors"
+                    >
+                        LIME Framework
+                    </a>
                 </div>
             </header>
-            <main className="py-10">
+            <main className="py-8 sm:py-10">
                 <ExplainableClassifier />
             </main>
         </div>
