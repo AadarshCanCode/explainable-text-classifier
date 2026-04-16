@@ -106,3 +106,6 @@ curl -X POST "http://localhost:8000/predict" \
 
 ![Expected UI Output Screenshot](placeholder.png)
 *(Run both backend and frontend servers locally and point your browser to `localhost:5173` to view the beautiful dashboard)*
+
+
+# Currently Writing a research paper on this
